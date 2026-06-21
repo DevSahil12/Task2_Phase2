@@ -1,61 +1,69 @@
 =================================================================
 PLACEMUX — SCALABILITY TEST REPORT
-Run at: 2026-06-19 09:35:44
+Run at: 2026-06-21 04:16:25
 =================================================================
 
 ─────────────────────────────────────────────────────────────────
 SCALE: Baseline (current)
   companies=80, jobs=300, students=600
-  Seeded: {'companies': 80, 'jobs': 300, 'students': 600, 'applications': 1800, 'events': 300}
-  [✓ FAST] Daily job supply (last 30d)                   0.07 ms
-  [✓ FAST] Fill rate by role                             0.09 ms
-  [✓ FAST] Hiring funnel                                 0.09 ms
-  [✓ FAST] Top companies by jobs                         0.12 ms
-  [✓ FAST] Applications per job                          0.48 ms
-  [✓ FAST] Shortlist rate                                0.13 ms
+  Seeded: {'companies': 80, 'jobs': 300, 'students': 600, 'applications': 1800, 'events': 300, 'views': 1200, 'searches': 600}
+  [✓ FAST] Daily job supply (last 30d)                   0.18 ms
+  [✓ FAST] Fill rate by role                             0.14 ms
+  [✓ FAST] Hiring funnel                                 0.15 ms
+  [✓ FAST] Top companies by jobs                         0.15 ms
+  [✓ FAST] Applications per job                          0.64 ms
+  [✓ FAST] Shortlist rate                                0.14 ms
+  [✓ FAST] Company funnel (per-company aggregate)        4.81 ms
+  [✓ FAST] Search fit-score ranking                      0.51 ms
 
 ─────────────────────────────────────────────────────────────────
 SCALE: 10x scale
   companies=800, jobs=3000, students=6000
-  Seeded: {'companies': 800, 'jobs': 3000, 'students': 6000, 'applications': 18000, 'events': 3000}
-  [✓ FAST] Daily job supply (last 30d)                   0.74 ms
-  [✓ FAST] Fill rate by role                             0.87 ms
-  [✓ FAST] Hiring funnel                                 0.86 ms
-  [✓ FAST] Top companies by jobs                         1.24 ms
-  [✓ FAST] Applications per job                          5.28 ms
-  [✓ FAST] Shortlist rate                                0.93 ms
+  Seeded: {'companies': 800, 'jobs': 3000, 'students': 6000, 'applications': 18000, 'events': 3000, 'views': 12000, 'searches': 6000}
+  [✓ FAST] Daily job supply (last 30d)                   0.98 ms
+  [✓ FAST] Fill rate by role                             1.17 ms
+  [✓ FAST] Hiring funnel                                 1.19 ms
+  [✓ FAST] Top companies by jobs                         1.59 ms
+  [✓ FAST] Applications per job                          7.53 ms
+  [✓ FAST] Shortlist rate                                1.37 ms
+  [✓ FAST] Company funnel (per-company aggregate)       56.49 ms
+  [✓ FAST] Search fit-score ranking                      4.34 ms
 
 ─────────────────────────────────────────────────────────────────
 SCALE: 50x scale
   companies=4000, jobs=15000, students=30000
-  Seeded: {'companies': 4000, 'jobs': 15000, 'students': 30000, 'applications': 90000, 'events': 15000}
-  [✓ FAST] Daily job supply (last 30d)                   3.74 ms
-  [✓ FAST] Fill rate by role                             5.03 ms
-  [✓ FAST] Hiring funnel                                 4.43 ms
-  [✓ FAST] Top companies by jobs                         6.45 ms
-  [✓ FAST] Applications per job                         33.61 ms
-  [✓ FAST] Shortlist rate                                4.87 ms
+  Seeded: {'companies': 4000, 'jobs': 15000, 'students': 30000, 'applications': 90000, 'events': 15000, 'views': 60000, 'searches': 30000}
+  [✓ FAST] Daily job supply (last 30d)                   5.00 ms
+  [✓ FAST] Fill rate by role                             5.90 ms
+  [✓ FAST] Hiring funnel                                 5.72 ms
+  [✓ FAST] Top companies by jobs                         8.15 ms
+  [✓ FAST] Applications per job                         46.13 ms
+  [✓ FAST] Shortlist rate                                6.47 ms
+  [⚠ SLOW] Company funnel (per-company aggregate)      306.40 ms
+  [✓ FAST] Search fit-score ranking                     24.05 ms
 
 ─────────────────────────────────────────────────────────────────
 SCALE: 100x scale
   companies=8000, jobs=30000, students=60000
-  Seeded: {'companies': 8000, 'jobs': 30000, 'students': 60000, 'applications': 180000, 'events': 30000}
-  [✓ FAST] Daily job supply (last 30d)                   7.23 ms
-  [✓ FAST] Fill rate by role                             9.58 ms
-  [✓ FAST] Hiring funnel                                 9.50 ms
-  [✓ FAST] Top companies by jobs                        12.76 ms
-  [✓ FAST] Applications per job                         67.70 ms
-  [✓ FAST] Shortlist rate                               10.38 ms
+  Seeded: {'companies': 8000, 'jobs': 30000, 'students': 60000, 'applications': 180000, 'events': 30000, 'views': 120000, 'searches': 60000}
+  [✓ FAST] Daily job supply (last 30d)                   9.92 ms
+  [✓ FAST] Fill rate by role                            12.67 ms
+  [✓ FAST] Hiring funnel                                12.32 ms
+  [✓ FAST] Top companies by jobs                        17.23 ms
+  [✓ FAST] Applications per job                         94.05 ms
+  [✓ FAST] Shortlist rate                               13.97 ms
+  [✗ CRITICAL] Company funnel (per-company aggregate)      710.38 ms
+  [✓ FAST] Search fit-score ranking                     83.88 ms
 
 ─────────────────────────────────────────────────────────────────
 CONCURRENT READ TEST — 20 simultaneous dashboard users
   Users: 20 | Errors: 0
-  Min: 96.14ms | Median: 352.90ms | Max: 382.34ms
+  Min: 126.70ms | Median: 351.34ms | Max: 367.93ms
   ✓ PASS — all queries completed under 1s
 
 ─────────────────────────────────────────────────────────────────
 WRITE THROUGHPUT TEST — job_posted events per second
-  500 events written in 0.01s → 57702.6 events/sec
+  500 events written in 0.01s → 41403.1 events/sec
   ✓ PASS — can sustain >100 events/sec
 
 =================================================================

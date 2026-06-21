@@ -4,6 +4,8 @@ conn = sqlite3.connect("placemux.db")
 cur = conn.cursor()
 
 cur.executescript("""
+DROP TABLE IF EXISTS job_view_events;
+DROP TABLE IF EXISTS job_search_events;
 DROP TABLE IF EXISTS job_supply_events;
 DROP TABLE IF EXISTS offers;
 DROP TABLE IF EXISTS interviews;
@@ -83,6 +85,35 @@ CREATE TABLE job_supply_events (
     emitted_at    TEXT,
     FOREIGN KEY (job_id)    REFERENCES jobs(job_id),
     FOREIGN KEY (company_id) REFERENCES companies(company_id)
+);
+
+-- ── TASK 3: Search & Discovery ─────────────────────────────────────────────
+-- Every search a student runs lands here. Powers search_to_view_rate,
+-- search_latency_p95, zero_result_rate, and the fit-ranking shown to students.
+CREATE TABLE job_search_events (
+    search_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id    INTEGER,
+    query         TEXT,
+    result_count  INTEGER,
+    latency_ms    INTEGER,
+    clicked_job_id INTEGER,
+    fit_score     REAL,
+    searched_at   TEXT,
+    FOREIGN KEY (student_id) REFERENCES students(student_id),
+    FOREIGN KEY (clicked_job_id) REFERENCES jobs(job_id)
+);
+
+-- Every time a student views a job (from search or browse), this fires.
+-- This is the event the company funnel's "Viewed" stage is built on.
+CREATE TABLE job_view_events (
+    view_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id    INTEGER,
+    job_id        INTEGER,
+    source        TEXT,      -- 'search' or 'browse'
+    fit_score     REAL,
+    viewed_at     TEXT,
+    FOREIGN KEY (student_id) REFERENCES students(student_id),
+    FOREIGN KEY (job_id)     REFERENCES jobs(job_id)
 );
 """)
 
