@@ -1,6 +1,6 @@
 """
 PlaceMux Analytics Dashboard
-Task 1 (Marketplace Health) + Task 2 (Job Supply Instrumentation)
+Task 1 (Marketplace Health) + Task 2 (Job Supply) + Task 3 (Search & Discovery / Company Funnel)
 Run: streamlit run dashboard.py
 """
 import streamlit as st
@@ -8,7 +8,7 @@ import sqlite3, pandas as pd, plotly.express as px, plotly.graph_objects as go
 import datetime as dt, os
 
 DB = os.path.join(os.path.dirname(__file__), "placemux.db")
-TODAY = dt.datetime(2026, 6, 18)
+TODAY = dt.datetime.now()
 
 st.set_page_config(page_title="PlaceMux Dashboard", page_icon="📊", layout="wide")
 
@@ -20,14 +20,15 @@ def q(sql):
     return df
 
 # ── header ──────────────────────────────────────────────────────────────────
-st.markdown("""
+st.markdown(f"""
 <div style='background:linear-gradient(90deg,#1e2761,#3b5bdb);padding:1.2rem 2rem;
             border-radius:12px;margin-bottom:1.2rem'>
   <h1 style='color:#fff;margin:0;font-size:1.8rem'>📊 PlaceMux Marketplace Dashboard</h1>
-  <p style='color:#cadcfc;margin:0.25rem 0 0'>Phase 2 · Week 2 · Task 1 & Task 2 &nbsp;|&nbsp; As of 18 Jun 2026</p>
+  <p style='color:#cadcfc;margin:0.25rem 0 0'>Phase 2 · Week 2 · Task 1, 2 & 3 &nbsp;|&nbsp; As of {TODAY.strftime('%d %b %Y')}</p>
 </div>""", unsafe_allow_html=True)
 
-tabs = st.tabs(["🏠 Overview", "📦 Job Supply (Task 2)", "🔍 Validation", "📋 Raw Data"])
+tabs = st.tabs(["🏠 Overview", "📦 Job Supply (Task 2)", "🏢 Company Funnel (Task 3)",
+                "🔍 Validation", "📋 Raw Data"])
 
 # ═══════════════════════════════════════════════════════
 # TAB 1 — OVERVIEW (Task 1 metrics)
@@ -262,9 +263,155 @@ with tabs[1]:
 
 
 # ═══════════════════════════════════════════════════════
-# TAB 3 — VALIDATION (Task 2 checks)
+# TAB 3 — COMPANY FUNNEL (Task 3 centrepiece)
 # ═══════════════════════════════════════════════════════
 with tabs[2]:
+    st.subheader("Company Funnel — Search & Discovery")
+    st.caption("Posted → Viewed → Applied → Shortlisted → Interviewed → Offered, "
+               "built from job_supply_events, job_view_events, applications, "
+               "interviews, and offers. This is the Task 3 deliverable — "
+               "the founder can open this and explain every number.")
+
+    funnel_agg = q("""
+        WITH posted AS (SELECT job_id FROM job_supply_events),
+        viewed AS (SELECT job_id, COUNT(*) n FROM job_view_events GROUP BY job_id),
+        applied AS (SELECT job_id, COUNT(*) n FROM applications GROUP BY job_id),
+        shortlisted AS (SELECT job_id, COUNT(*) n FROM applications WHERE status='Shortlisted' GROUP BY job_id),
+        interviewed AS (
+            SELECT a.job_id, COUNT(*) n FROM interviews i
+            JOIN applications a ON i.application_id=a.application_id GROUP BY a.job_id),
+        offered AS (
+            SELECT a.job_id, COUNT(*) n FROM offers o
+            JOIN applications a ON o.application_id=a.application_id GROUP BY a.job_id)
+        SELECT
+            COUNT(DISTINCT p.job_id) jobs_posted,
+            COALESCE(SUM(v.n),0) total_views,
+            COALESCE(SUM(ap.n),0) total_applications,
+            COALESCE(SUM(s.n),0) total_shortlisted,
+            COALESCE(SUM(iv.n),0) total_interviewed,
+            COALESCE(SUM(o.n),0) total_offered
+        FROM posted p
+        LEFT JOIN viewed v ON p.job_id=v.job_id
+        LEFT JOIN applied ap ON p.job_id=ap.job_id
+        LEFT JOIN shortlisted s ON p.job_id=s.job_id
+        LEFT JOIN interviewed iv ON p.job_id=iv.job_id
+        LEFT JOIN offered o ON p.job_id=o.job_id
+    """).iloc[0]
+
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    c1.metric("📦 Posted", int(funnel_agg["jobs_posted"]))
+    c2.metric("👁️ Viewed", int(funnel_agg["total_views"]))
+    c3.metric("📝 Applied", int(funnel_agg["total_applications"]))
+    c4.metric("⭐ Shortlisted", int(funnel_agg["total_shortlisted"]))
+    c5.metric("🗣️ Interviewed", int(funnel_agg["total_interviewed"]))
+    c6.metric("🏆 Offered", int(funnel_agg["total_offered"]))
+
+    st.divider()
+
+    funnel_df = pd.DataFrame({
+        "stage": ["Posted","Viewed","Applied","Shortlisted","Interviewed","Offered"],
+        "count": [funnel_agg["jobs_posted"], funnel_agg["total_views"],
+                 funnel_agg["total_applications"], funnel_agg["total_shortlisted"],
+                 funnel_agg["total_interviewed"], funnel_agg["total_offered"]]
+    })
+    fig_cf = go.Figure(go.Funnel(
+        y=funnel_df["stage"], x=funnel_df["count"],
+        textinfo="value+percent initial",
+        marker=dict(color=["#1e2761","#3b5bdb","#6b8cfa","#a5b4fc","#fbbf24","#22c55e"])
+    ))
+    fig_cf.update_layout(title="Aggregate Company Funnel (all companies)", height=380,
+                         margin=dict(t=40,b=10))
+    st.plotly_chart(fig_cf, use_container_width=True)
+
+    st.divider()
+    st.subheader("Per-Company Funnel")
+    st.caption("Select a company to see exactly where their candidates drop off — "
+               "this is the decision-grade view a company admin would actually use.")
+
+    company_list = q("SELECT DISTINCT company_name FROM companies ORDER BY company_name")["company_name"].tolist()
+    selected_co = st.selectbox("Company", company_list)
+
+    co_funnel = q(f"""
+        SELECT
+            COUNT(DISTINCT j.job_id) jobs_posted,
+            COUNT(DISTINCT v.view_id) views,
+            COUNT(DISTINCT a.application_id) applications,
+            COUNT(DISTINCT CASE WHEN a.status='Shortlisted' THEN a.application_id END) shortlisted,
+            COUNT(DISTINCT i.interview_id) interviewed,
+            COUNT(DISTINCT o.offer_id) offered
+        FROM companies c
+        JOIN jobs j ON c.company_id=j.company_id
+        LEFT JOIN job_view_events v ON j.job_id=v.job_id
+        LEFT JOIN applications a ON j.job_id=a.job_id
+        LEFT JOIN interviews i ON a.application_id=i.application_id
+        LEFT JOIN offers o ON a.application_id=o.application_id
+        WHERE c.company_name = '{selected_co.replace("'","''")}'
+    """).iloc[0]
+
+    co_funnel_df = pd.DataFrame({
+        "stage": ["Posted","Viewed","Applied","Shortlisted","Interviewed","Offered"],
+        "count": [co_funnel["jobs_posted"], co_funnel["views"], co_funnel["applications"],
+                 co_funnel["shortlisted"], co_funnel["interviewed"], co_funnel["offered"]]
+    })
+    col_cf1, col_cf2 = st.columns([2,1])
+    with col_cf1:
+        fig_co = go.Figure(go.Funnel(
+            y=co_funnel_df["stage"], x=co_funnel_df["count"],
+            textinfo="value+percent initial",
+            marker=dict(color=["#1e2761","#3b5bdb","#6b8cfa","#a5b4fc","#fbbf24","#22c55e"])
+        ))
+        fig_co.update_layout(title=f"{selected_co} — Funnel", height=340, margin=dict(t=40,b=10))
+        st.plotly_chart(fig_co, use_container_width=True)
+    with col_cf2:
+        st.markdown("**Drop-off diagnosis**")
+        v, a = co_funnel["views"], co_funnel["applications"]
+        if v > 0 and a > 0:
+            conv = round(a/v*100, 1)
+            if conv < 15:
+                st.warning(f"View→Apply: {conv}% — low. Job description or fit-ranking likely the issue, not candidate supply.")
+            else:
+                st.success(f"View→Apply: {conv}% — healthy conversion.")
+        s, i = co_funnel["shortlisted"], co_funnel["interviewed"]
+        if s > 0:
+            conv2 = round(i/s*100, 1) if s else 0
+            st.info(f"Shortlist→Interview: {conv2}%")
+
+    st.divider()
+    st.subheader("Search → View → Fit Ranking (Discovery layer)")
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        fit_dist = q("SELECT fit_score FROM job_search_events WHERE fit_score IS NOT NULL")
+        fig_fit = px.histogram(fit_dist, x="fit_score", nbins=30,
+                               title="Distribution of Fit Scores in Search Results",
+                               color_discrete_sequence=["#3b5bdb"])
+        fig_fit.update_layout(height=300, margin=dict(t=40,b=10))
+        st.plotly_chart(fig_fit, use_container_width=True)
+    with col_d2:
+        lat = q("SELECT latency_ms FROM job_search_events")
+        fig_lat = px.histogram(lat, x="latency_ms", nbins=30,
+                               title="Search Latency Distribution",
+                               color_discrete_sequence=["#f59e0b"])
+        p95 = lat["latency_ms"].quantile(0.95)
+        fig_lat.add_vline(x=p95, line_dash="dash", line_color="#ef4444",
+                          annotation_text=f"p95: {p95:.0f}ms")
+        fig_lat.update_layout(height=300, margin=dict(t=40,b=10))
+        st.plotly_chart(fig_lat, use_container_width=True)
+
+    st.subheader("Recent Searches (live)")
+    recent = q("""
+        SELECT s.searched_at, st.student_name, s.query, s.result_count,
+               s.latency_ms, s.fit_score,
+               CASE WHEN s.clicked_job_id IS NOT NULL THEN 'Clicked' ELSE 'Skipped' END AS outcome
+        FROM job_search_events s JOIN students st ON s.student_id=st.student_id
+        ORDER BY s.searched_at DESC LIMIT 25
+    """)
+    st.dataframe(recent, use_container_width=True, height=320)
+
+
+# ═══════════════════════════════════════════════════════
+# TAB 4 — VALIDATION (Task 2 + Task 3 checks)
+# ═══════════════════════════════════════════════════════
+with tabs[3]:
     st.subheader("Job Supply Event Validation — All Checks")
 
     STATUS_COLOR = {"PASS":"#22c55e","WARN":"#f59e0b","FAIL":"#ef4444"}
@@ -317,10 +464,56 @@ with tabs[2]:
     st.divider()
     st.success("✅ All 5 validation checks PASS — job_post events validated, jobs-posted view is live.")
 
+    st.divider()
+    st.subheader("Task 3 — Company Funnel Validation")
+
+    n_search = q("SELECT COUNT(*) n FROM job_search_events").iloc[0,0]
+    n_view   = q("SELECT COUNT(*) n FROM job_view_events").iloc[0,0]
+    s1 = "PASS" if n_search > 100 and n_view > 50 else "FAIL"
+    st.markdown(f'**Check 1 — Real data flowing (search & view events)** {badge(s1)}', unsafe_allow_html=True)
+    st.caption(f"job_search_events: {n_search} | job_view_events: {n_view}")
+
+    last_search = q("SELECT MAX(searched_at) ts FROM job_search_events").iloc[0,0]
+    hrs = (dt.datetime.now() - dt.datetime.strptime(last_search, "%Y-%m-%d %H:%M:%S")).total_seconds()/3600
+    s2 = "PASS" if hrs < 48 else "FAIL"
+    st.markdown(f'**Check 2 — Freshness (SLA: < 48h)** {badge(s2)}', unsafe_allow_html=True)
+    st.caption(f"Last search: {last_search} ({hrs:.1f}h ago)")
+
+    null_search = q("""
+        SELECT SUM(CASE WHEN student_id IS NULL THEN 1 ELSE 0 END) +
+               SUM(CASE WHEN query IS NULL THEN 1 ELSE 0 END) +
+               SUM(CASE WHEN latency_ms IS NULL THEN 1 ELSE 0 END) n
+        FROM job_search_events
+    """).iloc[0,0]
+    s3 = "PASS" if null_search == 0 else "WARN"
+    st.markdown(f'**Check 3 — Required search fields populated** {badge(s3)}', unsafe_allow_html=True)
+    st.caption(f"Nulls found: {null_search}")
+
+    dup_search = q("""
+        SELECT COUNT(*) n FROM (
+            SELECT student_id, query, searched_at, COUNT(*) c
+            FROM job_search_events GROUP BY student_id, query, searched_at HAVING c > 1)
+    """).iloc[0,0]
+    s4 = "PASS" if dup_search == 0 else "WARN"
+    st.markdown(f'**Check 4 — No duplicate search events** {badge(s4)}', unsafe_allow_html=True)
+    st.caption(f"Duplicates: {dup_search} — {'likely a retry/batch-seed artifact, monitor' if dup_search>0 else 'clean'}")
+
+    fit_range = q("SELECT MIN(fit_score) mn, MAX(fit_score) mx FROM job_search_events WHERE fit_score IS NOT NULL")
+    mn, mx = fit_range.iloc[0]["mn"], fit_range.iloc[0]["mx"]
+    s5 = "PASS" if (mn is not None and 0 <= mn and mx <= 100) else "FAIL"
+    st.markdown(f'**Check 5 — Fit score sanity (0-100 range)** {badge(s5)}', unsafe_allow_html=True)
+    st.caption(f"Range: {mn} – {mx}")
+
+    if s1=="PASS" and s2=="PASS" and s5=="PASS":
+        st.success("✅ Critical checks PASS — company funnel is real, sourced, and demoable.")
+    else:
+        st.warning("⚠️ Review warnings above before the live demo.")
+
 
 # ═══════════════════════════════════════════════════════
-# TAB 4 — RAW DATA
+# TAB 5 — RAW DATA
 # ═══════════════════════════════════════════════════════
-with tabs[3]:
-    table = st.selectbox("Table", ["applications","jobs","students","companies","interviews","offers","job_supply_events"])
+with tabs[4]:
+    table = st.selectbox("Table", ["applications","jobs","students","companies","interviews",
+                                   "offers","job_supply_events","job_search_events","job_view_events"])
     st.dataframe(q(f"SELECT * FROM {table}"), use_container_width=True, height=500)

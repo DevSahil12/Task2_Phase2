@@ -84,6 +84,95 @@ def emit_application(conn, student_id: int, job_id: int) -> int:
     return cur.lastrowid
 
 
+def compute_fit_score(student_skills: str, student_cgpa: float,
+                      job_skills: str, job_min_cgpa: float) -> float:
+    """
+    Fit score (0-100) used to rank search results — Task 3's "ranked by fit".
+    60% skill overlap (Jaccard-style) + 40% CGPA headroom above the threshold.
+    Students below the CGPA threshold score 0 on that component (they don't qualify).
+    """
+    s_skills = set(x.strip().lower() for x in student_skills.split(",") if x.strip())
+    j_skills = set(x.strip().lower() for x in job_skills.split(",") if x.strip())
+    if j_skills:
+        overlap = len(s_skills & j_skills) / len(j_skills)
+    else:
+        overlap = 0
+    if student_cgpa < job_min_cgpa:
+        cgpa_component = 0
+    else:
+        cgpa_component = min(1.0, (student_cgpa - job_min_cgpa) / 2.0 + 0.5)
+    return round((0.6 * overlap + 0.4 * cgpa_component) * 100, 1)
+
+
+def emit_job_search(conn, student_id: int, query: str) -> int:
+    """
+    Fires a job_search_performed event — Task 3 instrumentation.
+    Ranks open jobs by fit score against the searching student, returns
+    results ordered by fit (this IS the "ranked by fit" requirement),
+    and records which job (if any) the student clicked.
+    """
+    cur = conn.cursor()
+    student = cur.execute(
+        "SELECT skills, cgpa FROM students WHERE student_id=?", (student_id,)
+    ).fetchone()
+    if not student:
+        return None
+    s_skills, s_cgpa = student
+
+    t0 = time.perf_counter()
+    candidate_jobs = cur.execute(
+        "SELECT job_id, skills, min_cgpa FROM jobs WHERE status='open'"
+    ).fetchall()
+
+    ranked = []
+    for job_id, j_skills, j_min_cgpa in candidate_jobs:
+        # crude relevance filter: query matches title/skills loosely handled upstream;
+        # here we just rank all open jobs by fit (real search would also filter by query)
+        score = compute_fit_score(s_skills, s_cgpa, j_skills or "", j_min_cgpa or 0)
+        ranked.append((job_id, score))
+    ranked.sort(key=lambda x: x[1], reverse=True)
+    latency_ms = int((time.perf_counter() - t0) * 1000) + random.randint(15, 60)  # + network sim
+
+    result_count = len(ranked)
+    clicked_job_id, top_fit = (ranked[0][0], ranked[0][1]) if ranked else (None, None)
+    # students click the top result ~55% of the time, else skip
+    if not ranked or random.random() > 0.55:
+        clicked_job_id = None
+
+    now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute("""
+        INSERT INTO job_search_events
+            (student_id, query, result_count, latency_ms, clicked_job_id, fit_score, searched_at)
+        VALUES (?,?,?,?,?,?,?)
+    """, (student_id, query, result_count, latency_ms, clicked_job_id, top_fit, now))
+    search_id = cur.lastrowid
+
+    if clicked_job_id:
+        emit_job_view(conn, student_id, clicked_job_id, source="search", fit_score=top_fit, commit=False)
+
+    conn.commit()
+    return search_id
+
+
+def emit_job_view(conn, student_id: int, job_id: int, source="browse",
+                  fit_score=None, commit=True) -> int:
+    """Fires a job_viewed event — feeds the company funnel's 'Viewed' stage."""
+    cur = conn.cursor()
+    if fit_score is None:
+        student = cur.execute("SELECT skills, cgpa FROM students WHERE student_id=?", (student_id,)).fetchone()
+        job = cur.execute("SELECT skills, min_cgpa FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+        if student and job:
+            fit_score = compute_fit_score(student[0], student[1], job[0] or "", job[1] or 0)
+    now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute("""
+        INSERT INTO job_view_events (student_id, job_id, source, fit_score, viewed_at)
+        VALUES (?,?,?,?,?)
+    """, (student_id, job_id, source, fit_score, now))
+    if commit:
+        conn.commit()
+    return cur.lastrowid
+
+
 def seed(n_companies=80, n_jobs=300, n_students=600):
     """Seed the DB with realistic baseline data (run once)."""
     conn = get_conn()
@@ -130,6 +219,19 @@ def seed(n_companies=80, n_jobs=300, n_students=600):
         job_id = emit_job_posted(conn, comp_id, random.choice(ROLES), skills, min_cgpa, salary)
         job_ids.append(job_id)
 
+    # Searches & Views — Task 3: every search ranks open jobs by fit,
+    # and a fraction of searches lead to a view. Plus background browsing views.
+    QUERIES = ["python developer", "data analyst fresher", "backend engineer",
+               "remote sql jobs", "machine learning intern", "react developer",
+               "devops", "qa automation", "product manager", "full stack"]
+    for s_id in student_ids:
+        for _ in range(random.randint(1, 4)):
+            emit_job_search(conn, s_id, random.choice(QUERIES))
+        # background browsing views unrelated to a logged search
+        if random.random() < 0.5 and job_ids:
+            emit_job_view(conn, s_id, random.choice(job_ids), source="browse")
+    conn.commit()
+
     # Applications
     seen = set()
     for s_id in student_ids:
@@ -156,7 +258,8 @@ def seed(n_companies=80, n_jobs=300, n_students=600):
     conn.commit()
 
     totals = {}
-    for tbl in ["companies","jobs","students","applications","interviews","offers","job_supply_events"]:
+    for tbl in ["companies","jobs","students","applications","interviews","offers",
+                "job_supply_events","job_search_events","job_view_events"]:
         totals[tbl] = cur.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
     conn.close()
 
@@ -168,37 +271,49 @@ def seed(n_companies=80, n_jobs=300, n_students=600):
 def run_live(interval_sec=8):
     """
     Continuous live event loop.
-    Emits a new job_posted event every ~interval_sec seconds,
-    simulating the platform receiving real job postings in real time.
-    Press Ctrl+C to stop.
+    Alternates between job_posted (supply) and job_search_performed (discovery)
+    events, simulating real platform traffic. Press Ctrl+C to stop.
     """
     conn    = get_conn()
     cur     = conn.cursor()
     company_ids = [r[0] for r in cur.execute("SELECT company_id FROM companies").fetchall()]
+    student_ids = [r[0] for r in cur.execute("SELECT student_id FROM students").fetchall()]
 
     if not company_ids:
         print("No companies found. Run 'seed' first.")
         conn.close()
         return
 
-    print(f"Live feed started — emitting job_posted events every ~{interval_sec}s")
+    QUERIES = ["python developer", "data analyst fresher", "backend engineer",
+               "remote sql jobs", "machine learning intern", "react developer"]
+
+    print(f"Live feed started — emitting job_posted + job_search_performed events every ~{interval_sec}s")
     print("Press Ctrl+C to stop.\n")
     count = 0
     try:
         while True:
-            comp_id  = random.choice(company_ids)
-            title    = random.choice(ROLES)
-            skills   = ", ".join(random.sample(SKILLS, k=random.randint(2, 4)))
-            min_cgpa = random.choice([6.0, 6.5, 7.0, 7.5, 8.0])
-            salary   = random.choice(SALARIES)
+            if random.random() < 0.5 or not student_ids:
+                comp_id  = random.choice(company_ids)
+                title    = random.choice(ROLES)
+                skills   = ", ".join(random.sample(SKILLS, k=random.randint(2, 4)))
+                min_cgpa = random.choice([6.0, 6.5, 7.0, 7.5, 8.0])
+                salary   = random.choice(SALARIES)
 
-            job_id = emit_job_posted(conn, comp_id, title, skills, min_cgpa, salary)
-            count += 1
+                job_id = emit_job_posted(conn, comp_id, title, skills, min_cgpa, salary)
+                count += 1
 
-            total_events = cur.execute("SELECT COUNT(*) FROM job_supply_events").fetchone()[0]
-            print(f"[{dt.datetime.now().strftime('%H:%M:%S')}] job_posted → "
-                  f"job_id={job_id} | {title} | min_cgpa={min_cgpa} | "
-                  f"₹{salary:,} | total_events={total_events}")
+                total_events = cur.execute("SELECT COUNT(*) FROM job_supply_events").fetchone()[0]
+                print(f"[{dt.datetime.now().strftime('%H:%M:%S')}] job_posted → "
+                      f"job_id={job_id} | {title} | min_cgpa={min_cgpa} | "
+                      f"₹{salary:,} | total_events={total_events}")
+            else:
+                s_id = random.choice(student_ids)
+                query = random.choice(QUERIES)
+                search_id = emit_job_search(conn, s_id, query)
+                count += 1
+                total_searches = cur.execute("SELECT COUNT(*) FROM job_search_events").fetchone()[0]
+                print(f"[{dt.datetime.now().strftime('%H:%M:%S')}] job_search_performed → "
+                      f"student_id={s_id} | \"{query}\" | total_searches={total_searches}")
 
             time.sleep(interval_sec + random.uniform(-2, 2))
 
@@ -211,7 +326,8 @@ def status():
     conn = get_conn()
     cur  = conn.cursor()
     print("\n=== PlaceMux Live Data Status ===")
-    for tbl in ["companies","jobs","students","applications","interviews","offers","job_supply_events"]:
+    for tbl in ["companies","jobs","students","applications","interviews","offers",
+                "job_supply_events","job_search_events","job_view_events"]:
         n = cur.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
         print(f"  {tbl:25s} {n:>6d} rows")
     last = cur.execute("SELECT MAX(emitted_at) FROM job_supply_events").fetchone()[0]
