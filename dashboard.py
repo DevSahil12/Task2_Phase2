@@ -473,8 +473,14 @@ with tabs[3]:
     st.markdown(f'**Check 1 — Real data flowing (search & view events)** {badge(s1)}', unsafe_allow_html=True)
     st.caption(f"job_search_events: {n_search} | job_view_events: {n_view}")
 
-    last_search = q("SELECT MAX(searched_at) ts FROM job_search_events").iloc[0,0]
-    hrs = (dt.datetime.now() - dt.datetime.strptime(last_search, "%Y-%m-%d %H:%M:%S")).total_seconds()/3600
+    import pandas as pd
+
+last_search = q("SELECT MAX(searched_at) ts FROM job_search_events").iloc[0,0]
+
+if pd.notna(last_search):
+    hrs = (pd.Timestamp.now() - pd.to_datetime(last_search)).total_seconds() / 3600
+else:
+    hrs = 0
     s2 = "PASS" if hrs < 48 else "FAIL"
     st.markdown(f'**Check 2 — Freshness (SLA: < 48h)** {badge(s2)}', unsafe_allow_html=True)
     st.caption(f"Last search: {last_search} ({hrs:.1f}h ago)")
